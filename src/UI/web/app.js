@@ -95,9 +95,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
   /* ── #10 Text-to-Speech + #13 Lip-Sync ──────────────── */
-  function speakText(text, langOverride) {
-    if (!ttsEnabled || !('speechSynthesis' in window)) return;
+  function speakText(text, langOverride, onCompleteCallback) {
+    if (!ttsEnabled || !('speechSynthesis' in window)) {
+      if (onCompleteCallback) onCompleteCallback();
+      return;
+    }
     window.speechSynthesis.cancel();
+
+    // Pause any active speech recognition while robot is speaking to prevent self-listening feedback loop!
+    try { if (recognition) recognition.stop(); } catch(e) {}
+    try { if (wakeWordRecognition) wakeWordRecognition.stop(); } catch(e) {}
+
     var lang = langOverride || activeLang;
 
     // Pick the right voice for the language
@@ -134,6 +142,10 @@ document.addEventListener('DOMContentLoaded', function () {
       if (idx >= chunks.length) {
         ttsSpeaking = false;
         if (window.MedBot3D && window.MedBot3D.setLipSync) window.MedBot3D.setLipSync(false);
+        // Trigger completion callback AFTER TTS has 100% finished speaking!
+        if (typeof onCompleteCallback === 'function') {
+          setTimeout(onCompleteCallback, 300);
+        }
         return;
       }
       var utt = new SpeechSynthesisUtterance(chunks[idx++]);
@@ -152,6 +164,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     speakNext();
   }
+
 
   // ── Translation Helper (MyMemory free API) ──────────────
   async function translate(text, fromLang, toLang) {
@@ -266,27 +279,33 @@ document.addEventListener('DOMContentLoaded', function () {
       wakeWordRecognition.lang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
 
       wakeWordRecognition.onresult = function (e) {
-        if (isGenerating || micListening) return;
+        if (isGenerating || micListening || ttsSpeaking) return;
         for (var i = e.resultIndex; i < e.results.length; i++) {
           var transcript = e.results[i][0].transcript.toLowerCase().trim();
           var matched = WAKE_PHRASES.some(function (phrase) { return transcript.includes(phrase); });
           if (matched) {
-            wakeWordRecognition.stop();
+            try { wakeWordRecognition.stop(); } catch(err) {}
             wasVoiceQuery = true;
+            userInput.value = '';
+            
             var greeting = activeLang === 'ar'
               ? 'أهلاً بك! أنا دكتور ميد ريتريف، تفضل بطرح سؤالك الطبي.'
               : 'Hello! I am Dr. MedRetriv, how can I assist your clinical inquiry today?';
             
-            speakText(greeting, activeLang);
             if (window.MedBot3D) window.MedBot3D.setRobotState('happy');
             
-            setTimeout(function () {
-              if (recognition && !micListening) recognition.start();
-            }, 3000);
+            // SPEAK GREETING FIRST, THEN START MIC ONLY AFTER GREETING FINISHES!
+            speakText(greeting, activeLang, function () {
+              if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
+              if (recognition && !micListening && !isGenerating) {
+                try { recognition.start(); } catch (err) {}
+              }
+            });
             break;
           }
         }
       };
+
 
       wakeWordRecognition.onend = function () {
         // Restart wake-word listener automatically if idle
