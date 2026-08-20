@@ -217,17 +217,6 @@ document.addEventListener('DOMContentLoaded', function () {
   var micListening = false;
   var wasVoiceQuery = false; // True ONLY if query was submitted via Voice/Wake-word
 
-    // Self-speech filter phrases to prevent microphone from picking up robot's own TTS audio output
-    var SELF_SPEECH_PHRASES = [
-      'medretriv', 'clinical inquiry', 'assist your', 'how can i assist',
-      'أنا دكتور', 'تفضل بطرح', 'ميد ريتريف', 'سؤالك الطبي'
-    ];
-
-    function isSelfSpeech(text) {
-      var t = (text || '').toLowerCase().trim();
-      return SELF_SPEECH_PHRASES.some(function (p) { return t.includes(p); });
-    }
-
     // 1. Primary Query Recognition
     recognition = new SpeechRecognition();
     recognition.continuous    = false;
@@ -250,13 +239,6 @@ document.addEventListener('DOMContentLoaded', function () {
         else                       interim += e.results[i][0].transcript;
       }
       var captured = (final || interim).trim();
-
-      // Discard captured text if it contains Dr. MedRetriv's own greeting/TTS words!
-      if (isSelfSpeech(captured)) {
-        userInput.value = '';
-        return;
-      }
-
       userInput.value = captured;
       userInput.style.height = 'auto';
       userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
@@ -268,12 +250,10 @@ document.addEventListener('DOMContentLoaded', function () {
       if (window.MedBot3D) window.MedBot3D.setRobotState('idle');
 
       var text = userInput.value.trim();
-      // Auto-send if something REAL was captured (and NOT robot's own TTS audio)
-      if (text && !isSelfSpeech(text)) {
+      // Auto-send voice question if captured
+      if (text.length > 0 && !isGenerating) {
         wasVoiceQuery = true;
         handleSend();
-      } else {
-        userInput.value = ''; // Discard greeting residue
       }
     };
 
@@ -302,12 +282,11 @@ document.addEventListener('DOMContentLoaded', function () {
             userInput.value = '';
             
             var greeting = activeLang === 'ar'
-              ? 'أهلاً بك! أنا دكتور ميد ريتريف، تفضل بطرح سؤالك الطبي.'
-              : 'Hello! I am Dr. MedRetriv, how can I assist your clinical inquiry today?';
+              ? 'أهلاً بك! تفضل بطرح سؤالك.'
+              : 'Hello! How can I assist you today?';
             
             if (window.MedBot3D) window.MedBot3D.setRobotState('happy');
             
-            // SPEAK GREETING FIRST, THEN WAIT 800ms SILENCE BUFFER BEFORE STARTING MIC!
             speakText(greeting, activeLang, function () {
               setTimeout(function () {
                 if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
@@ -315,12 +294,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (recognition && !micListening && !isGenerating) {
                   try { recognition.start(); } catch (err) {}
                 }
-              }, 800);
+              }, 400);
             });
             break;
           }
         }
       };
+
 
 
 
