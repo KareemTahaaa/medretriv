@@ -182,40 +182,21 @@ document.addEventListener('DOMContentLoaded', function () {
     return text; // fallback: use original if translation fails
   }
 
-  // ── Language Toggle ──────────────────────────────────────
-  function syncLangUI() {
-    var btn = document.getElementById('lang-toggle-btn');
-    if (!btn) return;
-    if (activeLang === 'ar') {
-      btn.textContent = '🇸🇦';
-      btn.title = 'Switch to English';
-      btn.classList.add('active');
-      userInput.setAttribute('placeholder', 'اسأل سؤالاً طبياً باللغة العربية... (أو اضغط 🎤)');
-      userInput.setAttribute('dir', 'rtl');
-    } else {
-      btn.textContent = '🇬🇧';
-      btn.title = 'Switch to Arabic / التبديل للعربية';
-      btn.classList.remove('active');
-      userInput.setAttribute('placeholder', 'Ask a clinical breast cancer or screening question... (or tap 🎤)');
-      userInput.setAttribute('dir', 'ltr');
-    }
-    // Update speech recognition language
-    if (recognition) recognition.lang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
-    localStorage.setItem('medretriv_lang', activeLang);
-  }
-
-  function toggleLang() {
-    activeLang = activeLang === 'en' ? 'ar' : 'en';
-    syncLangUI();
-  }
-
-  syncLangUI();
-
   // ── Voice & Wake-word Tracking State ────────────────────
   var recognition = null;
   var wakeWordRecognition = null;
   var micListening = false;
-  var wasVoiceQuery = false; // True ONLY if query was submitted via Voice/Wake-word
+  var wasVoiceQuery = false;
+
+  var WAKE_PHRASES_EN = ['hello', 'hi dr med', 'hi dr. med', 'hi medbot', 'hey medbot', 'dr medretriv'];
+  var WAKE_PHRASES_AR = ['مرحبا', 'أهلا', 'اهلا', 'يا دكتور', 'دكتور'];
+
+  function initSpeechRecognition() {
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      if (micBtn) { micBtn.style.opacity = '0.35'; micBtn.title = 'Voice input not supported in this browser'; }
+      return;
+    }
 
     // 1. Primary Query Recognition
     recognition = new SpeechRecognition();
@@ -250,7 +231,6 @@ document.addEventListener('DOMContentLoaded', function () {
       if (window.MedBot3D) window.MedBot3D.setRobotState('idle');
 
       var text = userInput.value.trim();
-      // Auto-send voice question if captured
       if (text.length > 0 && !isGenerating) {
         wasVoiceQuery = true;
         handleSend();
@@ -264,7 +244,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (window.MedBot3D) window.MedBot3D.setRobotState('caution');
     };
 
-    // 2. Continuous Wake-word Recognition ("Hello / Hi Dr. Med")
+    // 2. Continuous Wake-word Recognition
     try {
       wakeWordRecognition = new SpeechRecognition();
       wakeWordRecognition.continuous = true;
@@ -273,9 +253,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
       wakeWordRecognition.onresult = function (e) {
         if (isGenerating || micListening || ttsSpeaking) return;
+        var phrases = activeLang === 'ar' ? WAKE_PHRASES_AR : WAKE_PHRASES_EN;
         for (var i = e.resultIndex; i < e.results.length; i++) {
           var transcript = e.results[i][0].transcript.toLowerCase().trim();
-          var matched = WAKE_PHRASES.some(function (phrase) { return transcript.includes(phrase); });
+          var matched = phrases.some(function (phrase) { return transcript.includes(phrase); });
           if (matched) {
             try { wakeWordRecognition.stop(); } catch(err) {}
             wasVoiceQuery = true;
@@ -292,32 +273,87 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
                 userInput.value = '';
                 if (recognition && !micListening && !isGenerating) {
-                  try { recognition.start(); } catch (err) {}
+                  try {
+                    recognition.lang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
+                    recognition.start();
+                  } catch (err) {}
                 }
-              }, 400);
+              }, 300);
             });
             break;
           }
         }
       };
 
-
-
-
       wakeWordRecognition.onend = function () {
-        // Restart wake-word listener automatically if idle
         setTimeout(function () {
           if (!micListening && !isGenerating && wakeWordRecognition) {
-            try { wakeWordRecognition.start(); } catch (err) {}
+            try {
+              wakeWordRecognition.lang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
+              wakeWordRecognition.start();
+            } catch (err) {}
           }
         }, 1500);
       };
 
-      // Start wake-word listener
       try { wakeWordRecognition.start(); } catch (err) {}
     } catch (e) {
-      console.warn('Wake-word recognition initialization skipped:', e);
+      console.warn('Wake-word recognition skipped:', e);
     }
+  }
+
+  // Initialize Speech Engines
+  initSpeechRecognition();
+
+  // ── Language Toggle Helper ──────────────────────────────
+  function syncLangUI() {
+    var btn = document.getElementById('lang-toggle-btn');
+    if (!btn) return;
+    if (activeLang === 'ar') {
+      btn.textContent = '🇸🇦';
+      btn.title = 'Switch to English';
+      btn.classList.add('active');
+      userInput.setAttribute('placeholder', 'اسأل سؤالاً طبياً باللغة العربية... (أو اضغط 🎤)');
+      userInput.setAttribute('dir', 'rtl');
+    } else {
+      btn.textContent = '🇬🇧';
+      btn.title = 'Switch to Arabic / التبديل للعربية';
+      btn.classList.remove('active');
+      userInput.setAttribute('placeholder', 'Ask a clinical breast cancer or screening question... (or tap 🎤)');
+      userInput.setAttribute('dir', 'ltr');
+    }
+
+    // Dynamically update speech recognition languages
+    var targetLang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
+    if (recognition) recognition.lang = targetLang;
+    if (wakeWordRecognition) wakeWordRecognition.lang = targetLang;
+
+    localStorage.setItem('medretriv_lang', activeLang);
+  }
+
+  function toggleLang() {
+    activeLang = activeLang === 'en' ? 'ar' : 'en';
+    
+    // Stop active speech recognition to switch language cleanly
+    if (micListening && recognition) {
+      try { recognition.stop(); } catch(e){}
+    }
+    if (wakeWordRecognition) {
+      try { wakeWordRecognition.stop(); } catch(e){}
+    }
+
+    syncLangUI();
+
+    // Restart wake-word recognition with new language
+    if (wakeWordRecognition) {
+      setTimeout(function () {
+        try { wakeWordRecognition.start(); } catch(e){}
+      }, 500);
+    }
+  }
+
+  syncLangUI();
+
   }
   initSpeechRecognition();
 
