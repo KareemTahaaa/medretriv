@@ -198,9 +198,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
   syncLangUI();
 
-  // ── Voice Input (#9) ────────────────────────────────────
+  // ── Voice & Wake-word Tracking State ────────────────────
   var recognition = null;
+  var wakeWordRecognition = null;
   var micListening = false;
+  var wasVoiceQuery = false; // True ONLY if query was submitted via Voice/Wake-word
+
+  // Wake-word phrases (English & Arabic)
+  var WAKE_PHRASES = ['hello', 'hi dr med', 'hi dr. med', 'hi medbot', 'hey medbot', 'dr medretriv', 'dr. medretriv', 'مرحبا', 'أهلا', 'اهلا', 'يا دكتور'];
 
   function initSpeechRecognition() {
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -208,14 +213,17 @@ document.addEventListener('DOMContentLoaded', function () {
       if (micBtn) { micBtn.style.opacity = '0.35'; micBtn.title = 'Voice input not supported in this browser'; }
       return;
     }
+
+    // 1. Primary Query Recognition
     recognition = new SpeechRecognition();
     recognition.continuous    = false;
     recognition.interimResults = true;
-    recognition.lang          = 'en-US';
+    recognition.lang          = activeLang === 'ar' ? 'ar-SA' : 'en-US';
     recognition.maxAlternatives = 1;
 
     recognition.onstart = function () {
       micListening = true;
+      wasVoiceQuery = true; // Mark as voice query!
       if (micBtn) micBtn.classList.add('listening');
       if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
     };
@@ -236,8 +244,11 @@ document.addEventListener('DOMContentLoaded', function () {
       micListening = false;
       if (micBtn) micBtn.classList.remove('listening');
       if (window.MedBot3D) window.MedBot3D.setRobotState('idle');
-      // Auto-send if something was captured
-      if (userInput.value.trim()) handleSend();
+      // Auto-send if something was captured via voice
+      if (userInput.value.trim()) {
+        wasVoiceQuery = true;
+        handleSend();
+      }
     };
 
     recognition.onerror = function (e) {
@@ -246,8 +257,54 @@ document.addEventListener('DOMContentLoaded', function () {
       console.warn('Speech recognition error:', e.error);
       if (window.MedBot3D) window.MedBot3D.setRobotState('caution');
     };
+
+    // 2. Continuous Wake-word Recognition ("Hello / Hi Dr. Med")
+    try {
+      wakeWordRecognition = new SpeechRecognition();
+      wakeWordRecognition.continuous = true;
+      wakeWordRecognition.interimResults = true;
+      wakeWordRecognition.lang = activeLang === 'ar' ? 'ar-SA' : 'en-US';
+
+      wakeWordRecognition.onresult = function (e) {
+        if (isGenerating || micListening) return;
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          var transcript = e.results[i][0].transcript.toLowerCase().trim();
+          var matched = WAKE_PHRASES.some(function (phrase) { return transcript.includes(phrase); });
+          if (matched) {
+            wakeWordRecognition.stop();
+            wasVoiceQuery = true;
+            var greeting = activeLang === 'ar'
+              ? 'أهلاً بك! أنا دكتور ميد ريتريف، تفضل بطرح سؤالك الطبي.'
+              : 'Hello! I am Dr. MedRetriv, how can I assist your clinical inquiry today?';
+            
+            speakText(greeting, activeLang);
+            if (window.MedBot3D) window.MedBot3D.setRobotState('happy');
+            
+            setTimeout(function () {
+              if (recognition && !micListening) recognition.start();
+            }, 3000);
+            break;
+          }
+        }
+      };
+
+      wakeWordRecognition.onend = function () {
+        // Restart wake-word listener automatically if idle
+        setTimeout(function () {
+          if (!micListening && !isGenerating && wakeWordRecognition) {
+            try { wakeWordRecognition.start(); } catch (err) {}
+          }
+        }, 1500);
+      };
+
+      // Start wake-word listener
+      try { wakeWordRecognition.start(); } catch (err) {}
+    } catch (e) {
+      console.warn('Wake-word recognition initialization skipped:', e);
+    }
   }
   initSpeechRecognition();
+
 
   // ── App Init ────────────────────────────────────────────
   initApp();
@@ -292,12 +349,16 @@ document.addEventListener('DOMContentLoaded', function () {
     userInput.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
+        wasVoiceQuery = false; // Keyboard input -> Text query!
         handleSend();
       } else {
         triggerTypingState();
       }
     });
-    sendBtn.addEventListener('click', handleSend);
+    sendBtn.addEventListener('click', function () {
+      wasVoiceQuery = false; // Mouse click -> Text query!
+      handleSend();
+    });
 
 
     // Mic button (#9)
@@ -308,6 +369,7 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
           // Cancel any ongoing TTS before listening
           if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+          wasVoiceQuery = true; // Voice query!
           recognition.start();
         }
       });
@@ -325,7 +387,11 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.starter-card').forEach(function (card) {
       card.addEventListener('click', function () {
         var p = card.getAttribute('data-prompt');
-        if (p && !isGenerating) { userInput.value = p; handleSend(); }
+        if (p && !isGenerating) {
+          userInput.value = p;
+          wasVoiceQuery = false; // Starter card click -> Text query!
+          handleSend();
+        }
       });
     });
 
@@ -544,11 +610,20 @@ document.addEventListener('DOMContentLoaded', function () {
           var refusalMsg = activeLang === 'ar'
             ? 'لا تتوفر لديّ أدلة كافية للإجابة على هذا السؤال.'
             : "I don't have enough grounded evidence to answer that question.";
-          speakText(refusalMsg, activeLang);
+          
+          // SPEAK ONLY IF USER TALKED VIA VOICE
+          if (wasVoiceQuery) {
+            speakText(refusalMsg, activeLang);
+          }
           setTimeout(function () { window.MedBot3D.setRobotState('idle'); }, 4000);
         } else {
           window.MedBot3D.setRobotState('happy');
-          speakText(displayProse, activeLang);
+          
+          // SPEAK ONLY IF USER TALKED VIA VOICE
+          if (wasVoiceQuery) {
+            speakText(displayProse, activeLang);
+          }
+          
           setTimeout(function () {
             if (!ttsSpeaking && window.MedBot3D) window.MedBot3D.setRobotState('idle');
           }, 4500);
@@ -563,8 +638,10 @@ document.addEventListener('DOMContentLoaded', function () {
       if (window.MedBot3D) window.MedBot3D.setRobotState('caution');
     } finally {
       isGenerating = false; sendBtn.disabled = false;
+      wasVoiceQuery = false; // Reset voice query flag
     }
   }
+
 
   function parseCitations(raw) {
     var re     = /\[Source:\s*(.*?)(?:,\s*Section:\s*(.*?))?,\s*Page:\s*([^\]]+)\]/g;
