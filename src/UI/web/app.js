@@ -217,14 +217,15 @@ document.addEventListener('DOMContentLoaded', function () {
   var micListening = false;
   var wasVoiceQuery = false; // True ONLY if query was submitted via Voice/Wake-word
 
-  // Wake-word phrases (English & Arabic)
-  var WAKE_PHRASES = ['hello', 'hi dr med', 'hi dr. med', 'hi medbot', 'hey medbot', 'dr medretriv', 'dr. medretriv', 'مرحبا', 'أهلا', 'اهلا', 'يا دكتور'];
+    // Self-speech filter phrases to prevent microphone from picking up robot's own TTS audio output
+    var SELF_SPEECH_PHRASES = [
+      'medretriv', 'clinical inquiry', 'assist your', 'how can i assist',
+      'أنا دكتور', 'تفضل بطرح', 'ميد ريتريف', 'سؤالك الطبي'
+    ];
 
-  function initSpeechRecognition() {
-    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      if (micBtn) { micBtn.style.opacity = '0.35'; micBtn.title = 'Voice input not supported in this browser'; }
-      return;
+    function isSelfSpeech(text) {
+      var t = (text || '').toLowerCase().trim();
+      return SELF_SPEECH_PHRASES.some(function (p) { return t.includes(p); });
     }
 
     // 1. Primary Query Recognition
@@ -236,7 +237,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     recognition.onstart = function () {
       micListening = true;
-      wasVoiceQuery = true; // Mark as voice query!
+      wasVoiceQuery = true;
       if (micBtn) micBtn.classList.add('listening');
       if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
     };
@@ -248,7 +249,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (e.results[i].isFinal) final   += e.results[i][0].transcript;
         else                       interim += e.results[i][0].transcript;
       }
-      userInput.value = final || interim;
+      var captured = (final || interim).trim();
+
+      // Discard captured text if it contains Dr. MedRetriv's own greeting/TTS words!
+      if (isSelfSpeech(captured)) {
+        userInput.value = '';
+        return;
+      }
+
+      userInput.value = captured;
       userInput.style.height = 'auto';
       userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
     };
@@ -257,10 +266,14 @@ document.addEventListener('DOMContentLoaded', function () {
       micListening = false;
       if (micBtn) micBtn.classList.remove('listening');
       if (window.MedBot3D) window.MedBot3D.setRobotState('idle');
-      // Auto-send if something was captured via voice
-      if (userInput.value.trim()) {
+
+      var text = userInput.value.trim();
+      // Auto-send if something REAL was captured (and NOT robot's own TTS audio)
+      if (text && !isSelfSpeech(text)) {
         wasVoiceQuery = true;
         handleSend();
+      } else {
+        userInput.value = ''; // Discard greeting residue
       }
     };
 
@@ -294,17 +307,21 @@ document.addEventListener('DOMContentLoaded', function () {
             
             if (window.MedBot3D) window.MedBot3D.setRobotState('happy');
             
-            // SPEAK GREETING FIRST, THEN START MIC ONLY AFTER GREETING FINISHES!
+            // SPEAK GREETING FIRST, THEN WAIT 800ms SILENCE BUFFER BEFORE STARTING MIC!
             speakText(greeting, activeLang, function () {
-              if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
-              if (recognition && !micListening && !isGenerating) {
-                try { recognition.start(); } catch (err) {}
-              }
+              setTimeout(function () {
+                if (window.MedBot3D) window.MedBot3D.setRobotState('surprised');
+                userInput.value = '';
+                if (recognition && !micListening && !isGenerating) {
+                  try { recognition.start(); } catch (err) {}
+                }
+              }, 800);
             });
             break;
           }
         }
       };
+
 
 
       wakeWordRecognition.onend = function () {
